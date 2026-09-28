@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map/src/layer/tile_layer/tile.dart';
@@ -204,7 +205,8 @@ class TileLayer extends StatefulWidget {
   /// (see #576 - even Error Images are cached in flutter)
   final EvictErrorTileStrategy evictErrorTileStrategy;
 
-  /// Stream to notify the [TileLayer] that it needs resetting
+  /// Stream to notify the [TileLayer] that it needs resetting: the tiles
+  /// which failed to load are loaded again (the loaded ones are kept).
   ///
   /// The tile layer will not listen to this stream if it is not specified on
   /// initial building, then later specified.
@@ -377,6 +379,11 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
   StreamSubscription<TileUpdateEvent>? _tileUpdateSubscription;
   Timer? _pruneLater;
 
+  // Zoom of the last build, and whether it rendered tiles of another zoom
+  // (see [_refreshFallbackClips]).
+  int? _builtZoom;
+  bool _fallbacksRendered = false;
+
   StreamSubscription<void>? _resetSub;
 
   // REMOVE once `tileSize` is removed, and replace references with
@@ -545,7 +552,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       createTile: (coordinates) => _createTileImage(
         coordinates: coordinates,
         tileBoundsAtZoom: tileBoundsAtZoom,
-        pruneAfterLoad: false,
+        pruneAfterLoad: true,
       ),
     );
 
@@ -557,7 +564,11 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     // We're happy to do a bit of diligent work here, since tiles not rendered are
     // cycles saved later on in the render pipeline.
     final tiles = _tileImageManager
-        .getTilesToRender(visibleRange: visibleTileRange)
+        .getTilesToRender(
+          visibleRange: visibleTileRange,
+          crs: _tileBounds.crs,
+          tileBoundsAtZoom: tileBoundsAtZoom,
+        )
         .map((tileRenderer) => Tile(
               // Must be an ObjectKey, not a ValueKey using the coordinates, in
               // case we remove and replace the TileImage with a different one.
@@ -570,6 +581,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
               tileImage: tileRenderer.tileImage,
               positionCoordinates: tileRenderer.positionCoordinates,
               tileBuilder: widget.tileBuilder,
+              clip: tileRenderer.clip,
             ))
         .toList();
 
@@ -587,6 +599,10 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       }
       return cmp;
     }
+
+    _builtZoom = tileZoom;
+    _fallbacksRendered =
+        tiles.any((tile) => tile.positionCoordinates.z != tileZoom);
 
     return MobileLayerTransformer(
       child: Stack(children: tiles..sort(renderOrder)),
@@ -611,7 +627,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
             widget,
           );
 
-    return TileImage(
+    final tile = TileImage(
       vsync: this,
       coordinates: coordinates,
       imageProvider: imageProvider,
@@ -623,6 +639,32 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       errorImage: widget.errorImage,
       cancelLoading: cancelLoading,
     );
+    return tile..addListener(() => _refreshFallbackClips(tile));
+  }
+
+  /// Rebuilds when a tile of the target zoom starts to cover while tiles of
+  /// another zoom are rendered: their clip (the holes they fill) is only
+  /// computed in [build], and the [TileLayer] is otherwise not rebuilt until
+  /// all tiles are loaded — in a transparent layer, the fallback would stay
+  /// painted under the arrived tile. One rebuild per frame: the flag is set
+  /// again by [build].
+  void _refreshFallbackClips(TileImage tile) {
+    if (!_fallbacksRendered ||
+        !mounted ||
+        tile.coordinates.z != _builtZoom ||
+        !tile.readyToDisplay ||
+        (tile.loadError && tile.errorImage == null)) {
+      return;
+    }
+    _fallbacksRendered = false;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    } else {
+      setState(() {});
+    }
   }
 
   /// Load and/or prune tiles according to the visible bounds of the [event]
@@ -645,6 +687,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
         visibleRange: visibleTileRange,
         pruneBuffer: widget.panBuffer + widget.keepBuffer,
         evictStrategy: widget.evictErrorTileStrategy,
+        crs: _tileBounds.crs,
+        tileBoundsAtZoom: _tileBounds.atZoom(tileZoom),
       );
     }
   }
@@ -668,6 +712,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       visibleRange: visibleTileRange,
       pruneBuffer: max(widget.panBuffer, widget.keepBuffer),
       evictStrategy: widget.evictErrorTileStrategy,
+      crs: _tileBounds.crs,
+      tileBoundsAtZoom: _tileBounds.atZoom(tileZoom),
     );
   }
 
@@ -746,10 +792,15 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
   }
 
   void _pruneWithCurrentCamera() {
-    final camera = MapCamera.of(context);
+    if (!mounted) return;
+    // Not `MapCamera.of(context)`: a tile loaded synchronously (image cache)
+    // while a map event is handled would be pruned against the previous
+    // camera, which the context still holds until the next build.
+    final camera = MapController.of(context).camera;
+    final tileZoom = _clampToNativeZoom(camera.zoom);
     final visibleTileRange = _tileRangeCalculator.calculate(
       camera: camera,
-      tileZoom: _clampToNativeZoom(camera.zoom),
+      tileZoom: tileZoom,
       center: camera.center,
       viewingZoom: camera.zoom,
     );
@@ -757,6 +808,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       visibleRange: visibleTileRange,
       pruneBuffer: max(widget.panBuffer, widget.keepBuffer),
       evictStrategy: widget.evictErrorTileStrategy,
+      crs: _tileBounds.crs,
+      tileBoundsAtZoom: _tileBounds.atZoom(tileZoom),
     );
     setState(() {});
   }
@@ -764,8 +817,13 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
   bool _outsideZoomLimits(num zoom) =>
       zoom < widget.minZoom || zoom > widget.maxZoom;
 
+  // Only reload the tiles which failed: the others stay painted.
   void _resetStreamHandler(void _) {
-    _tileImageManager.removeAll(widget.evictErrorTileStrategy);
-    if (mounted) _loadAndPruneInVisibleBounds(MapCamera.of(context));
+    _tileImageManager.removeErrorTiles();
+    // The current camera, not the one of the last build (see
+    // [_pruneWithCurrentCamera]): the stream may fire mid-gesture.
+    if (mounted) {
+      _loadAndPruneInVisibleBounds(MapController.of(context).camera);
+    }
   }
 }

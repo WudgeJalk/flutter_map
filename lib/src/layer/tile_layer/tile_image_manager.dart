@@ -49,18 +49,22 @@ class TileImageManager {
   ///      be left by tiles in #1, which are not ready yet.
   Iterable<TileRenderer> getTilesToRender({
     required DiscreteTileRange visibleRange,
+    required Crs crs,
+    required TileBoundsAtZoom tileBoundsAtZoom,
   }) {
-    final Iterable<TileCoordinates> positionCoordinates = _getTileImageView(
+    final positionCoordinates = _getTileImageView(
       visibleRange: visibleRange,
       // `keepRange` is irrelevant here since we're not using the output for
       // pruning storage but rather to decide on what to put on screen.
       keepRange: visibleRange,
-    ).renderTiles;
+      crs: crs,
+      tileBoundsAtZoom: tileBoundsAtZoom,
+    ).renderTilesWithClip;
     final List<TileRenderer> tileRenderers = <TileRenderer>[];
-    for (final position in positionCoordinates) {
+    for (final (position, clip) in positionCoordinates) {
       final TileImage? tileImage = _tiles[_resolver.get(position)];
       if (tileImage != null) {
-        tileRenderers.add(TileRenderer(tileImage, position));
+        tileRenderers.add(TileRenderer(tileImage, position, clip));
       }
     }
     return tileRenderers;
@@ -69,12 +73,16 @@ class TileImageManager {
   TileImageView _getTileImageView({
     required DiscreteTileRange visibleRange,
     required DiscreteTileRange keepRange,
+    required Crs crs,
+    required TileBoundsAtZoom tileBoundsAtZoom,
   }) =>
       TileImageView(
         tileImages: _tiles,
         positionCoordinates: _positionCoordinates,
         visibleRange: visibleRange,
         keepRange: keepRange,
+        scaleAt: (zoom) => crs.scale(zoom.toDouble()),
+        targetBounds: tileBoundsAtZoom,
         resolver: _resolver,
       );
 
@@ -158,6 +166,16 @@ class TileImageManager {
     }
   }
 
+  /// Remove the tiles which failed to load, so that the next load creates and
+  /// loads them again. The other tiles stay (and stay painted).
+  void removeErrorTiles() {
+    for (final key in List<TileCoordinates>.from(_positionCoordinates)) {
+      if (_tiles[_resolver.get(key)]?.loadError ?? false) {
+        _remove(key, evictImageFromCache: (_) => true);
+      }
+    }
+  }
+
   /// Reload all tile images of a [TileLayer] for a given tile bounds.
   void reloadImages(
     TileLayer layer,
@@ -191,10 +209,14 @@ class TileImageManager {
     required DiscreteTileRange visibleRange,
     required int pruneBuffer,
     required EvictErrorTileStrategy evictStrategy,
+    required Crs crs,
+    required TileBoundsAtZoom tileBoundsAtZoom,
   }) {
     final pruningState = _getTileImageView(
       visibleRange: visibleRange,
       keepRange: visibleRange.expand(pruneBuffer),
+      crs: crs,
+      tileBoundsAtZoom: tileBoundsAtZoom,
     );
 
     _evictErrorTiles(pruningState, evictStrategy);
@@ -226,11 +248,15 @@ class TileImageManager {
     required DiscreteTileRange visibleRange,
     required int pruneBuffer,
     required EvictErrorTileStrategy evictStrategy,
+    required Crs crs,
+    required TileBoundsAtZoom tileBoundsAtZoom,
   }) {
     _prune(
       _getTileImageView(
         visibleRange: visibleRange,
         keepRange: visibleRange.expand(pruneBuffer),
+        crs: crs,
+        tileBoundsAtZoom: tileBoundsAtZoom,
       ),
       evictStrategy,
     );

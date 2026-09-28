@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 
@@ -34,6 +35,11 @@ class Tile extends StatefulWidget {
   /// (for tile X: 8).
   final TileCoordinates positionCoordinates;
 
+  /// Where to paint the tile, as rectangles in its unit square, or `null` to
+  /// paint all of it: a tile of another zoom level only fills the holes left
+  /// by the target zoom (see `TileRenderer.clip`).
+  final List<Rect>? clip;
+
   /// Creates a new instance of [Tile].
   const Tile({
     super.key,
@@ -42,6 +48,7 @@ class Tile extends StatefulWidget {
     required this.tileImage,
     required this.tileBuilder,
     required this.positionCoordinates,
+    this.clip,
   });
 
   @override
@@ -67,6 +74,9 @@ class _TileState extends State<Tile> {
 
   @override
   Widget build(BuildContext context) {
+    final child =
+        widget.tileBuilder?.call(context, _tileImage, widget.tileImage) ??
+            _tileImage;
     return Positioned(
       left: widget.positionCoordinates.x * widget.scaledTileDimension -
           widget.currentPixelOrigin.dx,
@@ -74,8 +84,14 @@ class _TileState extends State<Tile> {
           widget.currentPixelOrigin.dy,
       width: widget.scaledTileDimension,
       height: widget.scaledTileDimension,
-      child: widget.tileBuilder?.call(context, _tileImage, widget.tileImage) ??
-          _tileImage,
+      child: widget.clip == null
+          ? child
+          // Hard edges, like the tiles: no anti-aliased seam at a hole.
+          : ClipPath(
+              clipper: _TileClipper(widget.clip!),
+              clipBehavior: Clip.hardEdge,
+              child: child,
+            ),
     );
   }
 
@@ -106,4 +122,29 @@ class _TileState extends State<Tile> {
       );
     }
   }
+}
+
+/// Clips a tile to rectangles given in its unit square.
+class _TileClipper extends CustomClipper<Path> {
+  final List<Rect> rects;
+
+  const _TileClipper(this.rects);
+
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    for (final r in rects) {
+      path.addRect(Rect.fromLTRB(
+        r.left * size.width,
+        r.top * size.height,
+        r.right * size.width,
+        r.bottom * size.height,
+      ));
+    }
+    return path;
+  }
+
+  @override
+  bool shouldReclip(_TileClipper oldClipper) =>
+      !listEquals(oldClipper.rects, rects);
 }

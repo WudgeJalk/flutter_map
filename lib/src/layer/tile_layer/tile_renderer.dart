@@ -1,3 +1,5 @@
+import 'dart:ui' show Rect;
+
 import 'package:flutter_map/src/layer/tile_layer/tile_coordinates.dart';
 import 'package:flutter_map/src/layer/tile_layer/tile_image.dart';
 
@@ -13,8 +15,12 @@ class TileRenderer {
   /// Position where to display [tileImage].
   final TileCoordinates positionCoordinates;
 
+  /// Where to paint [tileImage], as rectangles in the unit square of the
+  /// tile, or `null` to paint all of it (see `TileImageView.renderTilesWithClip`).
+  final List<Rect>? clip;
+
   /// Create an instance of [TileRenderer].
-  const TileRenderer(this.tileImage, this.positionCoordinates);
+  const TileRenderer(this.tileImage, this.positionCoordinates, [this.clip]);
 
   @override
   bool operator ==(Object other) {
