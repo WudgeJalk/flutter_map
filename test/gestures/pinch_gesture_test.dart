@@ -64,25 +64,19 @@ Future<MapController> _pumpMap(
 }
 
 /// Pinches/rotates through [steps] of (scale, degrees); [onStep] runs after
-/// each step. [swap] starts with the fingers the other way round.
+/// each step.
 Future<void> _pinch(
   WidgetTester tester,
   List<(double, double)> steps, {
   void Function(int)? onStep,
-  bool swap = false,
 }) async {
   final c = tester.getCenter(find.byType(FlutterMap));
-  List<Offset> at(double scale, double degrees) {
-    final p = _fingers(c, scale, degrees);
-    return swap ? p.reversed.toList() : p;
-  }
-
-  final start = at(1, 0);
+  final start = _fingers(c, 1, 0);
   final g1 = await tester.startGesture(start[0], pointer: 1);
   final g2 = await tester.startGesture(start[1], pointer: 2);
   await tester.pump();
   for (var i = 0; i < steps.length; i++) {
-    final p = at(steps[i].$1, steps[i].$2);
+    final p = _fingers(c, steps[i].$1, steps[i].$2);
     await g1.moveTo(p[0]);
     await g2.moveTo(p[1]);
     await tester.pump();
@@ -91,6 +85,8 @@ Future<void> _pinch(
   await g1.up();
   await g2.up();
   await tester.pumpAndSettle();
+  // Let the double tap timer expire.
+  await tester.pump(const Duration(seconds: 1));
 }
 
 void main() {
@@ -111,5 +107,18 @@ void main() {
       await _pinch(tester, [(1.5, 0), (2, 0)]);
       expect(controller.camera.zoom, closeTo(11, 1e-3));
     });
+  });
+
+  testWidgets('a small rotation across ±180° does not win the gesture race',
+      (tester) async {
+    final controller = await _pumpMap(
+      tester,
+      crs: const Epsg3857(),
+      zoom: 10,
+      options: const InteractionOptions(enableMultiFingerGestureRace: true),
+    );
+    // The line between the fingers starts at 180°.
+    await _pinch(tester, [(1.2, 2), (1.4, 4)]);
+    expect(controller.camera.rotation, 0);
   });
 }
