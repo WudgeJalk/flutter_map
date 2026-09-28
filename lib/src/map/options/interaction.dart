@@ -33,6 +33,13 @@ class InteractionOptions {
   /// [MultiFingerGesture] for custom settings
   final int rotationWinGestures;
 
+  /// Rotation dead zone in degrees, only used when
+  /// [enableMultiFingerGestureRace] is false. Pinch zoom and move always
+  /// apply; rotation is ignored until the gesture has rotated by more than
+  /// [rotationDeadZone], then follows the fingers minus the dead zone (no
+  /// jump) until the gesture ends. Defaults to 0 (rotation applies at once).
+  final double rotationDeadZone;
+
   /// Pinch Zoom threshold default is 0.5 Map starts to zoom when
   /// [pinchZoomThreshold] has been achieved or another multi finger gesture
   /// wins which allows [MultiFingerGesture.pinchZoom]
@@ -156,6 +163,7 @@ class InteractionOptions {
     this.enableMultiFingerGestureRace = false,
     this.rotationThreshold = 20.0,
     this.rotationWinGestures = MultiFingerGesture.rotate,
+    this.rotationDeadZone = 0.0,
     this.pinchZoomThreshold = 0.5,
     this.pinchZoomWinGestures =
         MultiFingerGesture.pinchZoom | MultiFingerGesture.pinchMove,
@@ -179,6 +187,10 @@ class InteractionOptions {
   })  : assert(
           rotationThreshold >= 0.0,
           '`rotationThreshold` must be positive',
+        ),
+        assert(
+          rotationDeadZone >= 0.0,
+          '`rotationDeadZone` must be positive',
         ),
         assert(
           pinchZoomThreshold >= 0.0,
@@ -211,6 +223,7 @@ class InteractionOptions {
       enableMultiFingerGestureRace == other.enableMultiFingerGestureRace &&
       rotationThreshold == other.rotationThreshold &&
       rotationWinGestures == other.rotationWinGestures &&
+      rotationDeadZone == other.rotationDeadZone &&
       pinchZoomThreshold == other.pinchZoomThreshold &&
       pinchZoomWinGestures == other.pinchZoomWinGestures &&
       pinchMoveThreshold == other.pinchMoveThreshold &&
@@ -231,6 +244,7 @@ class InteractionOptions {
         enableMultiFingerGestureRace,
         rotationThreshold,
         rotationWinGestures,
+        rotationDeadZone,
         pinchZoomThreshold,
         pinchZoomWinGestures,
         pinchMoveThreshold,

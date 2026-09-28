@@ -77,6 +77,8 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
   /// gesture wins
   late double _scaleCorrector;
   late double _lastRotation;
+  // Set once the rotation dead zone is exceeded: subtracted from the rotation.
+  double? _rotationDeadZoneOffset;
   late double _lastScale;
   late Offset _lastFocalLocal;
   late Offset _prevFocalLocal;
@@ -545,6 +547,7 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
     _rotationStarted = false;
 
     _lastRotation = 0.0;
+    _rotationDeadZoneOffset = null;
     _scaleCorrector = 0.0;
     _lastScale = 1.0;
   }
@@ -555,11 +558,11 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
       return;
     }
 
-    final currentRotation = details.rotation * radians2Degrees;
+    var currentRotation = details.rotation * radians2Degrees;
     if (_dragMode) {
       _handleScaleDragUpdate(details);
     } else if (InteractiveFlag.hasMultiFinger(_interactionOptions.flags)) {
-      _handleScaleMultiFingerUpdate(details, currentRotation);
+      currentRotation = _handleScaleMultiFingerUpdate(details, currentRotation);
     }
 
     _lastRotation = currentRotation;
@@ -589,11 +592,23 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
     }
   }
 
-  void _handleScaleMultiFingerUpdate(
+  /// Returns the applied rotation (after the dead zone).
+  double _handleScaleMultiFingerUpdate(
     ScaleUpdateDetails details,
-    double currentRotation,
+    double rawRotation,
   ) {
     final hasGestureRace = _interactionOptions.enableMultiFingerGestureRace;
+
+    var currentRotation = rawRotation;
+    final deadZone = _interactionOptions.rotationDeadZone;
+    if (!hasGestureRace && deadZone > 0) {
+      if (_rotationDeadZoneOffset == null && rawRotation.abs() >= deadZone) {
+        _rotationDeadZoneOffset = deadZone * rawRotation.sign;
+      }
+      currentRotation = _rotationDeadZoneOffset == null
+          ? 0
+          : rawRotation - _rotationDeadZoneOffset!;
+    }
 
     if (hasGestureRace && _gestureWinner == MultiFingerGesture.none) {
       final gestureWinner = _determineMultiFingerGestureWinner(
@@ -627,6 +642,7 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
         _handleScalePinchRotate(details, currentRotation);
       }
     }
+    return currentRotation;
   }
 
   void _handleScalePinchZoomAndMove(
